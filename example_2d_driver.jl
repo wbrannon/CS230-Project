@@ -9,6 +9,7 @@ using Distributions
 using Random
 
 include("example_lane_changer.jl")
+# include("./.julia/packages/AutomotiveDrivingModels/src/behaviors/lateral_driver_models.jl")
 
 mutable struct Example2DDriver <: DriverModel{LatLonAccel}
     rec::SceneRecord # don't use in final CS230 project, use list of scenes instead
@@ -19,7 +20,7 @@ mutable struct Example2DDriver <: DriverModel{LatLonAccel}
     function Example2DDriver(
         timestep::Float64;
         mlon::LaneFollowingDriver=IntelligentDriverModel(),
-        mlat::LateralDriverModel=ProportionalLaneTracker,
+        mlat::LateralDriverModel=ProportionalLaneTracker(),
         mlane::LaneChangeModel=ExampleLaneChanger(timestep),
         rec::SceneRecord = SceneRecord(1, timestep)
     )
@@ -41,7 +42,7 @@ function set_desired_speed!(model::Example2DDriver, v_des::Float64) # changes sp
     return model
 end
 
-function track_longitudinal!(driver::LaneFollowingDriver, scene::Frame{Entity{VehicleState, D, I}}, roadway::Roadway, vehicle_index::I, fore::NeigborLongitudinalResult) where {D, I}
+function track_longitudinal!(driver::LaneFollowingDriver, scene::Frame{Entity{VehicleState, D, I}}, roadway::Roadway, vehicle_index::I, fore::NeighborLongitudinalResult) where {D, I}
     v_ego = scene[vehicle_index].state.v 
     if fore.ind != nothing
         headway, v_oth = fore.Δs, scene[fore.ind].state.v
@@ -51,7 +52,7 @@ function track_longitudinal!(driver::LaneFollowingDriver, scene::Frame{Entity{Ve
     return track_longitudinal!(driver, v_ego, v_oth, headway)
 end
 
-function observe!(driver::Example2DDriver, scene::Frame{Entity{S, D, I}}, roadway::Roadway, egoid::I) where {S, D, I}
+function AutomotiveDrivingModels.observe!(driver::Example2DDriver, scene::Frame{Entity{S, D, I}}, roadway::Roadway, egoid::I) where {S, D, I}
     update!(driver.rec, scene)
     observe!(driver.mlane, scene, roadway, egoid)
 
@@ -69,11 +70,12 @@ function observe!(driver::Example2DDriver, scene::Frame{Entity{S, D, I}}, roadwa
         @assert(lane_change_action.dir == DIR_RIGHT)
         fore = get_neighbor_fore_along_right_lane(scene, vehicle_index, roadway, VehicleTargetPointFront(), VehicleTargetPointRear(), VehicleTargetPointFront())
     end
-
     track_lateral!(driver.mlat, laneoffset, lateral_speed)
     track_longitudinal!(driver.mlon, scene, roadway, vehicle_index, fore)
 
     return driver
+end
+
 Base.rand(rng::AbstractRNG, driver::Example2DDriver) = LatLonAccel((rand(rng, driver.mlat)).a)
 Distributions.pdf(driver::Example2DDriver, a::LatLonAccel) = pdf(driver.mlat, a.a_lat) * pdf(driver.mlon, a.a_lon)
 Distributions.logpdf(driver::Example2DDriver, a::LatLonAccel) = logpdf(driver.mlat, a.a_lat) * logpdf(driver.mlon, a.a_lon)

@@ -10,7 +10,7 @@ mutable struct ExampleLaneChanger <: LaneChangeModel{LaneChangeChoice}
     v_des::Float64
     threshold_fore::Float64
     threshold_lane_change_gap_fore::Float64
-    threshold_lange_change_gap_rear::Float64
+    threshold_lane_change_gap_rear::Float64
 
     function ExampleLaneChanger(
         timestep::Float64;
@@ -61,14 +61,14 @@ function observe!(model::ExampleLaneChanger, scene::Frame{Entity{S, D, I}}, road
     if fore_M.Δs < model.threshold_fore # there is a lead vehicle
         veh_M = scene[fore_M.ind]
         speed_M = veh_M.state.v
-        if speed_M ≦ min(model.v_des, v) # they are driving slower than we want
+        if speed_M <= min(model.v_des, v) # they are driving slower than we want
             speed_ahead = speed_M
 
             # consider changing to a different lane 
             if right_lane_exists &&
                 fore_R.Δs > model.threshold_lane_change_gap_rear && # there is space rear 
                 rear_R.Δs > model.threshold_lane_change_gap_fore && # there is space fore 
-                (rear_R.ind === nothing || scene[rear_R.ind].state.v ≦ v) && # we are faster than any follower
+                (rear_R.ind === nothing || scene[rear_R.ind].state.v <= v) && # we are faster than any follower
                 (fore_R.ind === nothing || scene[fore_R.ind].state.v > speed_ahead) # lead is faster than current speed 
 
                 speed_ahead = fore_R.ind != nothing ? scene[fore_R.ind].state.v : Inf
@@ -77,7 +77,7 @@ function observe!(model::ExampleLaneChanger, scene::Frame{Entity{S, D, I}}, road
             if left_lane_exists &&
                 fore_L.Δs > model.threshold_lane_change_gap_rear && # there is space rear 
                 rear_L.Δs > model.threshold_lane_change_gap_fore && # there is space fore 
-                (rear_L.ind === nothing || scene[rear_L.ind].state.v ≦ v) && # we are faster than any follower
+                (rear_L.ind === nothing || scene[rear_L.ind].state.v <= v) && # we are faster than any follower
                 (fore_L.ind === nothing || scene[fore_L.ind].state.v > speed_ahead) # lead is faster than current speed 
 
                 speed_ahead = fore_R.ind != nothing ? scene[fore_R.ind].state.v : Inf
@@ -89,4 +89,4 @@ function observe!(model::ExampleLaneChanger, scene::Frame{Entity{S, D, I}}, road
     return model
 end
 
-Base.rand(rng::AbstractRNG, model::ExampleLaneChanger, LaneChangeChoise(model.dir))
+Base.rand(rng::AbstractRNG, model::ExampleLaneChanger) =  LaneChangeChoice(model.dir)
