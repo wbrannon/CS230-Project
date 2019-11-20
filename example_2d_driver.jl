@@ -70,13 +70,13 @@ function AutomotiveDrivingModels.observe!(driver::Example2DDriver, scene::Frame{
         @assert(lane_change_action.dir == DIR_RIGHT)
         fore = get_neighbor_fore_along_right_lane(scene, vehicle_index, roadway, VehicleTargetPointFront(), VehicleTargetPointRear(), VehicleTargetPointFront())
     end
-    track_lateral!(driver.mlat, laneoffset, lateral_speed)
-    track_longitudinal!(driver.mlon, scene, roadway, vehicle_index, fore)
+    AutomotiveDrivingModels.track_lateral!(driver.mlat, laneoffset, lateral_speed)
+    AutomotiveDrivingModels.track_longitudinal!(driver.mlon, scene, roadway, vehicle_index, fore)
 
     return driver
 end
 
-Base.rand(rng::AbstractRNG, driver::Example2DDriver) = LatLonAccel((rand(rng, driver.mlat)).a)
+Base.rand(rng::AbstractRNG, driver::Example2DDriver) = LatLonAccel(rand(rng, driver.mlat), rand(rng, driver.mlon).a)
 Distributions.pdf(driver::Example2DDriver, a::LatLonAccel) = pdf(driver.mlat, a.a_lat) * pdf(driver.mlon, a.a_lon)
 Distributions.logpdf(driver::Example2DDriver, a::LatLonAccel) = logpdf(driver.mlat, a.a_lat) * logpdf(driver.mlon, a.a_lon)
     
