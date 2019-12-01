@@ -4,6 +4,22 @@
 using AutomotiveDrivingModels
 using AutoViz
 using Random
+using Parameters
+
+# for use with MDP formulation
+# this may or may not make it easier
+# use populate_env! function to populate roadway
+@with_kw mutable struct laneChangeEnvironment
+    nlanes::Int = 4
+    starting_lane::Int = 1
+    current_lane::Int = starting_lane
+    desired_lane::Int = nlanes
+    ncars::Int = 5                 
+    road_length::Float64 = 200
+    roadway::Roadway = gen_straight_roadway(nlanes, road_length)
+    scene::Scene = Scene()
+    collision::Bool = false
+end
 
 # check if the random spot chosen in populate_env is already currently taken; if it is, this will return false. If it is available,
 # then the spots_taken tuple will be appended with the new spot 
@@ -27,8 +43,8 @@ end
 # randomly populate road with a specified amount of human driven vehicles. For now, don't assume that the ego vehicle starts from
 # the same spot every time
 function populate_env!(ncars::Int, nlanes::Int, road_length::Float64, roadway::Roadway, scene::Scene)
-    # initialize spots_taken to make sure that 
-    spots_taken = [(0, 0.)] # make array of tuples to determine if a spot is taken up
+    # initialize spots_taken
+    spots_taken = [(1, 0.)] # make array of tuples to determine if a spot is taken up - this first one is where we want AV to be 
     curve = roadway[1].lanes[1].curve
     min_speed = 10.0 # m/s
     max_speed = 30.0 # m/s 
@@ -43,6 +59,7 @@ function populate_env!(ncars::Int, nlanes::Int, road_length::Float64, roadway::R
             curr_vel = rand(collect(min_speed:max_speed))
             # des_vel = rand(collect(min_speed:max_speed)) # add desired velocity later
             des_spot = (lane, x_pos)
+            # for now, just quickly make sure that we don't place a HV where the AV is supposed to start
             if lane_available!(des_spot, spots_taken)
                 car_placed = true
                 posG = VecSE2(x_pos, 0., 0.)
@@ -53,6 +70,7 @@ function populate_env!(ncars::Int, nlanes::Int, road_length::Float64, roadway::R
                 push!(scene, car)
                 number_car_placed += 1
             end
+            
         end
     end
 end
