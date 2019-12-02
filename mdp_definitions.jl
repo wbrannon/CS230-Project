@@ -5,11 +5,7 @@ include("lane_change_env.jl")
 
 MAX_LONG_ACCEL = 4. # m/s^2
 MAX_LONG_ACCEL = 2. # m/s^2
-# will probably have to tinker with these
-GOAL_LANE_REWARD = 10.
-COLLISION_REWARD = -50.
-WAITING_REWARD = -1. # think of better name for this one
-TIMEOUT_REWARD = -10
+
 # for now, don't account for partial observability
 # need to define custom state and custom state transition function
 
@@ -27,24 +23,7 @@ mutable struct AgentState
     lat_accel::Float64
 end
 
-function reward_fn(vehicle::Entity{AgentState, VehicleDef, Int64}, env::laneChangeEnvironment, mdp::laneChangeMDP)
-    # check if we collide BEFORE we check if we're in the goal lane; otherwise, we might crash to get into the goal lane
-    # there is a collision_checker(scene, egoid function)
-    if env.collision
-        env.terminal_state = true
-        return COLLISION_REWARD
-    elseif env.current_lane == env.desired_lane
-        env.terminal_state = true
-        return GOAL_LANE_REWARD
-    elseif mdp.timesteps_allowed == 0 # timed out - not sure if this is a good way to do this but let's give it a shot!
-        env.terminal_state = true
-        return TIMEOUT_REWARD
-    else
-        return WAITING_REWARD
-    end
-end
-
-function AutomotiveDrivingModels.propagate(vehicle::Entity{AgentState, VehicleDef, Int64}, action::LatLonAccel, roadway::Roadway, timestep::Float64)
+function AutomotiveDrivingModels.propagate(vehicle::Entity{AgentState, VehicleDef, Int64}, action::LatLonAccel, egoid::Int, roadway::Roadway, timestep::Float64)
     agent = vehicle.state # should pick up the AgentState here
     x = agent.state.posG.x
     y = agent.state.posG.y

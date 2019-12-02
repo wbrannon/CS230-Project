@@ -15,9 +15,10 @@ using Parameters
     current_lane::Int = starting_lane
     desired_lane::Int = nlanes
     ncars::Int = 5                 
-    road_length::Float64 = 200
+    road_length::Float64 = 200.
     roadway::Roadway = gen_straight_roadway(nlanes, road_length)
     scene::Scene = Scene()
+    ego_idx::Int = 1
     collision::Bool = false
 end
 

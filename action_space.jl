@@ -18,28 +18,35 @@ TIMESTEP = 0.1
 RIGHT_LANE_IDX = 1 # change this if the orientation changes for some reason
 
 mutable struct action_space
-    slow_turn::LatLonAccel
-    normal_turn::LatLonAccel
-    speed_turn::LatLonAccel
+    slow_left::LatLonAccel
+    normal_left::LatLonAccel
+    speed_left::LatLonAccel
     slow_straight::LatLonAccel
     straight::LatLonAccel
     speed_straight::LatLonAccel
+    slow_right::LatLonAccel
+    normal_right::LatLonAccel
+    speed_right::LatLonAccel
 end
 
 # will actually likely have to use DIR from lane_change_models.jl instead of MAX_LAT_ACCEL
 function action_space()
     # make LatLonAccel models here, and determine the direction to turn (if applicable) later
-    slow_turn = LatLonAccel(MAX_LAT_ACCEL, -MAX_LONG_ACCEL) # covers slow_right and slow_left 
-    normal_turn = LatLonAccel(MAX_LAT_ACCEL, 0.)            # left and right 
-    speed_turn = LatLonAccel(MAX_LAT_ACCEL, 0.)             # speed_left and speed_right
+    slow_left = LatLonAccel(-MAX_LAT_ACCEL, -MAX_LONG_ACCEL) # covers slow_right and slow_left 
+    normal_left = LatLonAccel(-MAX_LAT_ACCEL, 0.)            # left and right 
+    speed_left = LatLonAccel(-MAX_LAT_ACCEL, MAX_LONG_ACCEL)             # speed_left and speed_right
 
     slow_straight = LatLonAccel(0., -MAX_LONG_ACCEL) 
     straight = LatLonAccel(0., 0.)
     speed_straight = speed_straight::LatLonAccel=LatLonAccel(0., MAX_LONG_ACCEL)
+
+    slow_right = LatLonAccel(MAX_LAT_ACCEL, -MAX_LONG_ACCEL)
+    normal_right = LatLonAccel(MAX_LAT_ACCEL, 0.)
+    speed_right = LatLonAccel(MAX_LAT_ACCEL, MAX_LONG_ACCEL)
     # check if left lane exists and is available
     # -if there is a vehicle occupying the left lane right beside us, assume not safe
     # -check velocities of all upcoming and all ahead vehicles, to make sure velocity diff between ego vehicle and HVs will not cause a wreck
-    return action_space(slow_turn, normal_turn, speed_turn, slow_straight, straight, speed_straight)
+    return action_space(slow_left, normal_left, speed_left, slow_straight, straight, speed_straight, slow_right, normal_right, speed_right)
 end
 
 
