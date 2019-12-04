@@ -4,7 +4,7 @@ include("action_space.jl")
 include("lane_change_env.jl")
 
 MAX_LONG_ACCEL = 4. # m/s^2
-MAX_LONG_ACCEL = 2. # m/s^2
+MAX_LAT_ACCEL = 2. # m/s^2
 
 # for now, don't account for partial observability
 # need to define custom state and custom state transition function
@@ -23,20 +23,19 @@ mutable struct AgentState
     lat_accel::Float64
 end
 
-function AutomotiveDrivingModels.propagate(vehicle::Entity{AgentState, VehicleDef, Int64}, action::LatLonAccel, egoid::Int, roadway::Roadway, timestep::Float64)
+function AutomotiveDrivingModels.propagate(vehicle::Entity{VehicleState, VehicleDef, Int64}, action::LatLonAccel, egoid::Int, roadway::Roadway, timestep::Float64, lat_accel::Float64, long_accel::Float64)
     agent = vehicle.state # should pick up the AgentState here
-    x = agent.state.posG.x
-    y = agent.state.posG.y
-    θ = agent.state.posG.θ
-    
-    vel = agent.state.v 
-    long_accel = agent.long_accel           # current longitudinal acceleration
-    lat_accel = agent.lat_accel             # current lateral acceleration
+    x = agent.posG.x
+    y = agent.posG.y
+    θ = agent.posG.θ
+    vel = agent.v 
+    # long_accel = agent.long_accel           # current longitudinal acceleration
+    # lat_accel = agent.lat_accel             # current lateral acceleration
     new_long_accel = long_accel + action.a_lon
     # clip to make sure that our acceleration stays within bounds, as is true in reality
     if new_long_accel > MAX_LONG_ACCEL
         new_long_accel = MAX_LONG_ACCEL
-    elseif new_long_vel < -MAX_LONG_ACCEL
+    elseif new_long_accel < -MAX_LONG_ACCEL
         new_long_accel = -MAX_LONG_ACCEL
     end
 
@@ -49,7 +48,7 @@ function AutomotiveDrivingModels.propagate(vehicle::Entity{AgentState, VehicleDe
 
     # for now, getting a lot of this math from lat_lon_accel.jl
 
-    ϕ = agent.state.posF.ϕ                      # lane relative heading
+    ϕ = agent.posF.ϕ                      # lane relative heading
     curr_long_vel = vel * cos(ϕ)                # longitudinal velocity
     curr_long_vel = max(0., curr_long_vel)      # prevents reversing
 
@@ -62,6 +61,7 @@ function AutomotiveDrivingModels.propagate(vehicle::Entity{AgentState, VehicleDe
 
     new_x = x + new_vel * cos(θ) * timestep
     new_y = y + new_vel * sin(θ) * timestep
+    
 
     # the comment right below might be relevant only if something closer to steering angle actually becomes part of the action space
     # math for new theta - might just have to add the lateral accleration (this is steering rate pretty much) * timestep squared
@@ -69,7 +69,8 @@ function AutomotiveDrivingModels.propagate(vehicle::Entity{AgentState, VehicleDe
     new_θ = θ + atan(new_lat_vel, new_long_vel) # keep an eye on this, this is taken from lat_lon_accel.jl
 
     posG = VecSE2(new_x, new_y, new_θ)
-    new_vehicle_state = VehicleState(posG, roadway, new_vel)
+    new_vehicle_state = VehicleState(posG, roadway, new_long_vel)
 
-    return AgentState(new_vehicle_state, new_long_accel, new_lat_accel)
+    # return AgentState(new_vehicle_state, new_long_accel, new_lat_accel)
+    return new_vehicle_state, new_lat_accel, new_long_accel
 end

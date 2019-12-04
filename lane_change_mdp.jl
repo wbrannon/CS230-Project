@@ -3,6 +3,7 @@ using POMDPs
 using POMDPModels
 using Random
 using Parameters
+using Statistics
 
 include("mdp_definitions.jl")
 include("action_space.jl")
@@ -10,50 +11,58 @@ include("lane_change_env.jl")
 include("lat_lon_driver.jl")
 
 # will probably have to tinker with these
-GOAL_LANE_REWARD = 10.
-COLLISION_REWARD = -50.
+GOAL_LANE_REWARD = 100.
+COLLISION_REWARD = -500.
 WAITING_REWARD = -1. # think of better name for this one
-TIMEOUT_REWARD = -10
+TIMEOUT_REWARD = -20
 EGO_ID = 1
 
 # this should be where the magic happens - where the states, transitions, rewards, etc. are actually called 
 @with_kw mutable struct laneChangeMDP <: MDP{Scene, Int64} # figure out what to put within the MDP type
     env::laneChangeEnvironment = laneChangeEnvironment()
     discount_factor::Float64 = 0.95
-    timesteps_allowed::Int = 100 # with a timestep of 0.1, this is 10 seconds - this will decrement per time step
     terminal_state::Bool = false # this changes after we reach a terminal state (reach goal lane or crash) or we time out (timesteps_allowed reaches zero)
     collision::Bool = false # figure out a collision function
-    starting_velocity::Float64 = 20.0
+    starting_velocity::Float64 = 10.0
     timestep::Float64 = 0.1
+    lat_accel::Float64 = 0.
+    long_accel::Float64 = 0.
     model::lat_lon_driver = lat_lon_driver(starting_velocity, timestep)
     # action_space::action_space = action_space()
     driver_models::Dict{Int, DriverModel} = Dict{Int, DriverModel}(EGO_ID => model)
+    num_features::Int = 3 + env.ncars * 3
 end
 
 # this needs to return the next state and reward
 function POMDPs.gen(mdp::laneChangeMDP, s::Scene, a::Int64, rng::AbstractRNG)
     scene = deepcopy(s)
-    # define actionmap function that maps an integer to an action model
-    veh_idx = findfirst(EGO_ID, scene)
-    action, direction = actionmap(mdp, a)
+    mdp.env.num_steps += 1
+    # define action_map function that maps an integer to an action model
+    vehicle_idx = findfirst(EGO_ID, scene)
+    action, direction = action_map(mdp, a)
     # propagate the ego vehicle first, make sure this doesn't cause any issues
-    new_ego_state = propogate(scene[vehicle_idx], action, EGO_ID, mdp.env.roadway, mdp.timestep)
+    new_ego_state, mdp.lat_accel, mdp.long_accel = propagate(scene[vehicle_idx], action, EGO_ID, mdp.env.roadway, mdp.timestep, mdp.lat_accel, mdp.long_accel)
     scene[EGO_ID] = Entity(new_ego_state, scene[EGO_ID].def, scene[EGO_ID].id)
     acts = Vector{LaneFollowingAccel}(undef, length(scene))
 
     # get the actions of all the other vehicles, this is taken from the get_actions! function in simulate.jl
     for (i, veh) in enumerate(scene)
-        if i != EGO_ID
+        if veh.id != EGO_ID
             model = mdp.driver_models[veh.id]
-            observe!(model, scene, mdp.env.roadway, veh.id)
+            # observe!(model, scene, mdp.env.roadway, veh.id)
+            # line 229, neighbors_features.jl - returns as NeighborLongitudinalResult
+            forward_neighbor = get_neighbor_fore_along_lane(scene, veh.id, mdp.env.roadway)
+            forward_distance = forward_neighbor.Δs
+            track_longitudinal!(model, scene, mdp.env.roadway, veh.id, forward_neighbor)
             acts[i] = rand(model)
+            # acts[i] = model.a
         end
     end
 
     # next, propogate the scene for everyone else, this is taken from the tick! function in simulate.jl
     for i in EGO_ID+1:length(scene)
         veh = scene[i]
-        new_state = propagate(veh, actions[i], mdp.env.roadway, mdp.timestep)
+        new_state = propagate(veh, acts[i], mdp.env.roadway, mdp.timestep)
         scene[i] = Entity(new_state, veh.def, veh.id)
     end
     # update mdp scene
@@ -73,10 +82,21 @@ POMDPs.actionindex(mdp::laneChangeMDP, a::Int64) = a
 
 # create an initial scene with all assigned behavioral models - details regarding the HVs are taken care of in lane_change_env.jl
 function POMDPs.initialstate(mdp::laneChangeMDP, rng::AbstractRNG)
-    mdp.env.scene, mdp.env.roadway = create_env(mdp.env.ncars, mdp.env.nlanes, mdp.env.road_length, mdp.env.roadway, mdp.env.scene)
+    # get clean slate for roadway and scene
+    mdp.env = laneChangeEnvironment()
+    ego_posG = VecSE2(0.,0.,0.)
+    curve = mdp.env.roadway[1].lanes[1].curve
+    lane = Lane(LaneTag(1, 1), curve)
+    ego_vel = mdp.starting_velocity # m/s
+    ego_posF = Frenet(ego_posG, lane, mdp.env.roadway)
+    ego_state = VehicleState(ego_posF, mdp.env.roadway, ego_vel) # can change the ego state here
+    ego = Vehicle(ego_state, VehicleDef(), EGO_ID) 
+    push!(mdp.env.scene, ego)
+    mdp.env.scene, mdp.env.roadway = create_env(mdp.env)
     mdp.driver_models::Dict{Int, DriverModel} = Dict{Int, DriverModel}(EGO_ID => mdp.model)
+    
     # assign behavioral models, for now just go with IDM - the create_env function takes care of assigning velocities randomly
-    for i in EGO_ID+1:mdp.env.ncars
+    for i in EGO_ID+1:mdp.env.ncars+1
         mdp.driver_models[i] = IntelligentDriverModel(v_des = mdp.env.scene[i].state.v)
     end
     # not sure if I need to add a burn in period - keep this in mind
@@ -98,7 +118,7 @@ function POMDPs.reward(mdp::laneChangeMDP, s::Scene, a::Int64, sp::Scene)
     elseif ego_lane == mdp.env.desired_lane
         mdp.env.terminal_state = true
         r += GOAL_LANE_REWARD
-    elseif mdp.timesteps_allowed == 0 # timed out - not sure if this is a good way to do this but let's give it a shot!
+    elseif mdp.env.num_steps == mdp.env.max_steps # timed out - not sure if this is a good way to do this but let's give it a shot!
         mdp.env.terminal_state = true
         r += TIMEOUT_REWARD
     else
@@ -116,19 +136,20 @@ function POMDPs.convert_s(::Type{V}, s::Scene, mdp::laneChangeMDP) where V<:Abst
     env = mdp.env
     features = ones(3 + 3 * env.ncars)
     ego_idx = findfirst(EGO_ID, s)
-    ego_veh = scene[ego_idx]
+    ego_veh = mdp.env.scene[ego_idx]
     features[1] = ego_veh.state.posG.x
     features[2] = ego_veh.state.posG.y
     features[3] = ego_veh.state.v
     veh_idx = EGO_ID+1
     feature_idx = 1
-    while veh_idx < env.ncars
-        veh = scene[veh_idx]
-        features[3+feature_idx:6+feature_idx] = veh.state.posG.x, veh.state.posG.y, veh.state.v
+    while veh_idx <= env.ncars + 1
+        veh = mdp.env.scene[veh_idx]
+        features[3+feature_idx:feature_idx+5] = [veh.state.posG.x, veh.state.posG.y, veh.state.v]
         feature_idx += 3
         veh_idx +=1
     end
-    return features
+    features = normalize_features(features)
+    return convert(Array{Float32}, features)
 end
 
 # not sure if I need to define the transition function - shouldn't need to since the gen and transition function are redundant
@@ -137,53 +158,77 @@ end
 # define function that takes in an integer (1-9) and returns an action
 function action_map(mdp::laneChangeMDP, a::Int64)
     # get safe actions first
-    all_actions = action_space()
-    safe_action_space = get_action_space_dict(all_actions, mdp.model, mdp.env.scene, mdp.env.roadway, findfirst(EGO_ID, mdp.env.scene))
+    actions = action_space()
+    safe_action_space = get_action_space_dict(actions, mdp.model, mdp.env.scene, mdp.env.roadway, findfirst(EGO_ID, mdp.env.scene))
     # assign 1-3 to left, 4-6 to straight, and 7-9 to right
     action_string = "slow_straight"
     direction = 0
     if a == 1
         action_string = "slow_left"
         direction = -1
-        act = action_space.slow_left
+        act = actions.slow_left
     elseif a == 2
         action_string = "normal_left"
         direction = -1
-        act = action_space.normal_left
+        act = actions.normal_left
     elseif a == 3
         action_string = "speed_left"
         direction = -1
-        act = action_space.speed_left
+        act = actions.speed_left
     elseif a == 4
         action_string = "slow_straight"
         direction = 0
-        act = action_space.slow_straight
+        act = actions.slow_straight
     elseif a == 5
         action_string = "normal_straight"
         direction = 0
-        act = action_space.straight
+        act = actions.straight
     elseif a == 6
         action_string = "speed_straight"
         direction = 0
-        act = action_space.speed_straight
+        act = actions.speed_straight
     elseif a == 7
         action_string = "slow_right"
         direction = 1
-        act = action_space.slow_right
+        act = actions.slow_right
     elseif a == 8
         action_string = "normal_right"
         direction = 1
-        act = action_space.normal_right
+        act = actions.normal_right
     elseif a == 9
         action_string = "speed_right"
         direction = 1
-        act = action_space.speed_right
+        act = actions.speed_right
     end
     # check if the proposed action is contained within the safe action space - if not, just return straight and it should hopefully work
     if !safe_action_space[action_string]
         direction = 0
-        act = action_space.slow_straight
+        act = actions.slow_straight
     end
 
     return act, direction
 end
+
+# need to normalize feature vector to put in network
+function normalize_features(features::Array{Float64})
+    # use batch normalization
+    vec_sum = sum(features)
+    vec_mean = vec_sum / length(features)
+    vec_variance = var(features)
+    e = 0.001
+    features = (features .- vec_mean) / sqrt(vec_variance + e)
+    return features
+end
+
+function simulate(mdp::laneChangeMDP, policy::Policy)
+    mdp.env.scene = initialstate(mdp, rand(Int, 1))
+    scene_vec = [mdp.env.scene]
+    for i = 1:mdp.env.max_steps
+        features = convert_s(mdp.env.scene, mdp)
+        # plug features into policy, get a
+        mdp.env.scene, reward = gen(mdp, mdp.env.scene, a, rand(Int, 1))
+        append!(scene_vec, mdp.env.scene)
+
+    end
+end
+

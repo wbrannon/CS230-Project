@@ -14,12 +14,15 @@ using Parameters
     starting_lane::Int = 1
     current_lane::Int = starting_lane
     desired_lane::Int = nlanes
-    ncars::Int = 5                 
-    road_length::Float64 = 200.
+    ncars::Int = 2                
+    road_length::Float64 = 2000.
     roadway::Roadway = gen_straight_roadway(nlanes, road_length)
     scene::Scene = Scene()
     ego_idx::Int = 1
     collision::Bool = false
+    terminal_state::Bool = false
+    num_steps::Int = 0
+    max_steps::Int = 2000
 end
 
 # check if the random spot chosen in populate_env is already currently taken; if it is, this will return false. If it is available,
@@ -77,9 +80,9 @@ function populate_env!(ncars::Int, nlanes::Int, road_length::Float64, roadway::R
 end
 
 
-function create_env(ncars::Int, nlanes::Int, road_length::Float64)
-    roadway = gen_straight_roadway(nlanes, road_length)
-    scene = Scene()
-    populate_env!(ncars, nlanes, road_length, roadway, scene)
-    return scene, roadway
+function create_env(env::laneChangeEnvironment)
+    # roadway = gen_straight_roadway(nlanes, road_length)
+    # scene = Scene()
+    populate_env!(env.ncars, env.nlanes, env.road_length, env.roadway, env.scene)
+    return env.scene, env.roadway
 end
