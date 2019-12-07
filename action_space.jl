@@ -7,14 +7,15 @@ include("lat_lon_driver.jl")
 NUMBER_DISCRETE_ACTIONS = 9
 MAX_SPEED = 50. # m/s 
 NORMAL_LAT_ACCEL = 0.5 # m/s^2
-DIR_RIGHT = -1 # this is for LaneChangeChoice
+# assigning speeds and directions with actions - since the lanes increment to the left, assign positive number with going left
+DIR_RIGHT = -1 
 DIR_MIDDLE =  0
 DIR_LEFT =  1
 MIN_LANE_CHANGE_HEADWAY = 10. # m
 NUM_DIRECTIONS = 3
 TIMESTEP = 0.1
-LONG_ACCEL = 5 * TIMESTEP # m/s^2
-LAT_ACCEL = 0.3 * TIMESTEP # m/s^2
+LONG_ACCEL = 3 * TIMESTEP # m/s^2
+LAT_ACCEL = 0.5 * TIMESTEP # m/s^2
 RIGHT_LANE_IDX = 1 # change this if the orientation changes for some reason
 
 mutable struct action_space
@@ -32,17 +33,17 @@ end
 # will actually likely have to use DIR from lane_change_models.jl instead of MAX_LAT_ACCEL
 function action_space()
     # make LatLonAccel models here, and determine the direction to turn (if applicable) later
-    slow_left = LatLonAccel(-LAT_ACCEL, -LONG_ACCEL) # covers slow_right and slow_left 
-    normal_left = LatLonAccel(-LAT_ACCEL, 0.)            # left and right 
-    speed_left = LatLonAccel(-LAT_ACCEL, LONG_ACCEL)             # speed_left and speed_right
+    slow_left = LatLonAccel(LAT_ACCEL, -LONG_ACCEL) # covers slow_right and slow_left 
+    normal_left = LatLonAccel(LAT_ACCEL, 0.)            # left and right 
+    speed_left = LatLonAccel(LAT_ACCEL, LONG_ACCEL)             # speed_left and speed_right
 
     slow_straight = LatLonAccel(0., -LONG_ACCEL) 
     straight = LatLonAccel(0., 0.)
     speed_straight = speed_straight::LatLonAccel=LatLonAccel(0., LONG_ACCEL)
 
-    slow_right = LatLonAccel(LAT_ACCEL, -LONG_ACCEL)
-    normal_right = LatLonAccel(LAT_ACCEL, 0.)
-    speed_right = LatLonAccel(LAT_ACCEL, LONG_ACCEL)
+    slow_right = LatLonAccel(-LAT_ACCEL, -LONG_ACCEL)
+    normal_right = LatLonAccel(-LAT_ACCEL, 0.)
+    speed_right = LatLonAccel(-LAT_ACCEL, LONG_ACCEL)
     # check if left lane exists and is available
     # -if there is a vehicle occupying the left lane right beside us, assume not safe
     # -check velocities of all upcoming and all ahead vehicles, to make sure velocity diff between ego vehicle and HVs will not cause a wreck
@@ -55,9 +56,9 @@ function get_action_space_dict(actions::action_space, model::lat_lon_driver, sce
 
     prev_string = "slow_" # start with slow actions and transition to quick actions
     trial_string = "left"
-    direction = -1 # corresponds to left turn 
+    direction = 1 # corresponds to left turn 
     # action = actions.slow_turn
-    for i in 1:NUMBER_DISCRETE_ACTIONS
+    for i in 1:NUMBER_DISCRETE_ACTIONS+1
         # check if potential action is safe
         if is_safe(model, actions, prev_string * trial_string, scene, roadway, vehicle_idx, direction)
             action_dict[prev_string * trial_string] = true
@@ -74,13 +75,13 @@ function get_action_space_dict(actions::action_space, model::lat_lon_driver, sce
             prev_string = "slow_"
         end
 
-        # transition direction - goes from left to straight to right
-        if i >= NUM_DIRECTIONS && i < 2 * NUM_DIRECTIONS
+        # transition direction - goes from left to straight to right - it's already left so don't include here
+        if i > NUM_DIRECTIONS && i <= 2 * NUM_DIRECTIONS # from i = 4 to i = 6
             trial_string = "straight"
             direction = 0
-        elseif i >= 2 * NUM_DIRECTIONS
+        elseif i > 2 * NUM_DIRECTIONS   # from i = 7 to 9
             trial_string = "right"
-            direction = 1
+            direction = -1
         end
     end 
     return action_dict
@@ -90,7 +91,7 @@ end
 function is_safe(model::lat_lon_driver, actions::action_space, speed_str::String, scene::Scene, roadway::Roadway, vehicle_idx::Int, direction::Int)
     # action has both a lateral acceleration and a longitudinal acceleration attached
     curr_vel = model.long_model.v_des # CHANGE THIS TO ACTUAL CURRENT VELOCITY
-    curr_lane = scene[vehicle_idx].state.posF.roadind.tag.lane
+    curr_lane = get_by_id(scene, vehicle_idx).state.posF.roadind.tag.lane
     nlanes = roadway.segments[1].lanes[end].tag.lane
     # check if turning and at what speed to determine the potential acceleration
     if direction != 0 
@@ -114,7 +115,7 @@ function is_safe(model::lat_lon_driver, actions::action_space, speed_str::String
 
     distance_traveled = curr_vel * TIMESTEP + des_accel * TIMESTEP^2
     # want to check if the current distance + the distance to be traveled by the neighbor is larger than the distance that we will travel
-    if direction == -1 # corresponds to moving to left lane 
+    if direction == 1 # corresponds to moving to left lane 
         # first check if we're already in the leftmost lane 
         if curr_lane == nlanes return false
         end
@@ -158,7 +159,7 @@ function is_safe(model::lat_lon_driver, actions::action_space, speed_str::String
         else
             return false
         end
-    else # direction should be 1 (corresponding to right)
+    else # direction should be -1 (corresponding to right)
         # check if we're in the first lane, in which we cannot move to a right lane
         if curr_lane == RIGHT_LANE_IDX return false
         end
@@ -190,12 +191,12 @@ function get_actions(model::lat_lon_driver, scene::Scene, roadway::Roadway, ego_
     max_speed = 50. # use this later 
     max_accel = 2 # m/s^2
     timestep = 0.1 # s
-    vehicle_idx = findfirst(ego_id, scene)
+    # vehicle_idx = findfirst(ego_id, scene)
     # try out speed up action first 
-    curr_state = scene[vehicle_idx].state
+    curr_state = get_by_id(scene, ego_id).state
     curr_vel = curr_state.v 
     actions = action_space()
-    return get_action_space_dict(actions, model, scene, roadway, vehicle_idx)
+    return get_action_space_dict(actions, model, scene, roadway, ego_id)
 end
 
 

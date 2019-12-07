@@ -11,11 +11,18 @@ include("lane_change_env.jl")
 include("lat_lon_driver.jl")
 
 # will probably have to tinker with these
-GOAL_LANE_REWARD = 100.
-COLLISION_REWARD = -500.
-WAITING_REWARD = -1. # think of better name for this one
-TIMEOUT_REWARD = -20
+GOAL_LANE_REWARD = 1. #3. #10000.
+COLLISION_REWARD = -1. #-500.
+WAITING_REWARD = -0.001 #-0.0005 # -1
+TIMEOUT_REWARD = -0.4 #-0.8 #-50.
+BACKWARD_REWARD = -0.8 #-0.4 #-50.
+ROAD_END_REWARD =  -0.4 #-0.8 #-50
+TOO_SLOW_REWARD = -1 #-0.005 #-5.
+OFFROAD_REWARD = -0.4 #-0.01 #-1. # gets scaled by the amount of distance offroad
+HEADING_REWARD = -0.005 #-0.00005 # gets multiplied by heading
+PROGRESS_REWARD = 0.5 #0.7 #500.
 EGO_ID = 1
+
 
 # this should be where the magic happens - where the states, transitions, rewards, etc. are actually called 
 @with_kw mutable struct laneChangeMDP <: MDP{Scene, Int64} # figure out what to put within the MDP type
@@ -30,30 +37,35 @@ EGO_ID = 1
     model::lat_lon_driver = lat_lon_driver(starting_velocity, timestep)
     # action_space::action_space = action_space()
     driver_models::Dict{Int, DriverModel} = Dict{Int, DriverModel}(EGO_ID => model)
-    num_features::Int = 3 + env.ncars * 3
+    recommended_speed::Float64 = 10.
+    num_features::Int = (1 + env.ncars) * 3
+    side_slip::Float64 = 0.
 end
 
 # this needs to return the next state and reward
 function POMDPs.gen(mdp::laneChangeMDP, s::Scene, a::Int64, rng::AbstractRNG)
     scene = deepcopy(s)
-    mdp.env.num_steps += 1
     # define action_map function that maps an integer to an action model
-    vehicle_idx = findfirst(EGO_ID, scene)
+    # vehicle_idx = findfirst(EGO_ID, scene)
     action, direction = action_map(mdp, a)
+    ego_vehicle = get_by_id(s, EGO_ID)
     # propagate the ego vehicle first, make sure this doesn't cause any issues
-    new_ego_state, mdp.lat_accel, mdp.long_accel = propagate(scene[vehicle_idx], action, EGO_ID, mdp.env.roadway, mdp.timestep, mdp.lat_accel, mdp.long_accel)
+    new_ego_state, mdp.lat_accel, mdp.long_accel, mdp.side_slip = propagate(ego_vehicle, action, EGO_ID, mdp.env.roadway, mdp.timestep, mdp.lat_accel, mdp.long_accel, mdp.side_slip)
+    # scene[vehicle_idx] = Entity(new_ego_state, scene[EGO_ID].def, scene[vehicle_idx].id)
+    # ego_vehicle = get_by_id(scene, EGO_ID)
     scene[EGO_ID] = Entity(new_ego_state, scene[EGO_ID].def, scene[EGO_ID].id)
     acts = Vector{LaneFollowingAccel}(undef, length(scene))
 
     # get the actions of all the other vehicles, this is taken from the get_actions! function in simulate.jl
     for (i, veh) in enumerate(scene)
-        if veh.id != EGO_ID
-            model = mdp.driver_models[veh.id]
+        # if veh.id != EGO_ID
+        if i != EGO_ID
+            model = mdp.driver_models[i]
             # observe!(model, scene, mdp.env.roadway, veh.id)
             # line 229, neighbors_features.jl - returns as NeighborLongitudinalResult
-            forward_neighbor = get_neighbor_fore_along_lane(scene, veh.id, mdp.env.roadway)
+            forward_neighbor = get_neighbor_fore_along_lane(scene, i, mdp.env.roadway)
             forward_distance = forward_neighbor.Δs
-            track_longitudinal!(model, scene, mdp.env.roadway, veh.id, forward_neighbor)
+            track_longitudinal!(model, scene, mdp.env.roadway, i, forward_neighbor)
             acts[i] = rand(model)
             # acts[i] = model.a
         end
@@ -61,6 +73,7 @@ function POMDPs.gen(mdp::laneChangeMDP, s::Scene, a::Int64, rng::AbstractRNG)
 
     # next, propogate the scene for everyone else, this is taken from the tick! function in simulate.jl
     for i in EGO_ID+1:length(scene)
+        # vehicle_idx = findfirst(i, scene)
         veh = scene[i]
         new_state = propagate(veh, acts[i], mdp.env.roadway, mdp.timestep)
         scene[i] = Entity(new_state, veh.def, veh.id)
@@ -89,8 +102,9 @@ function POMDPs.initialstate(mdp::laneChangeMDP, rng::AbstractRNG)
     lane = Lane(LaneTag(1, 1), curve)
     ego_vel = mdp.starting_velocity # m/s
     ego_posF = Frenet(ego_posG, lane, mdp.env.roadway)
-    ego_state = VehicleState(ego_posF, mdp.env.roadway, ego_vel) # can change the ego state here
-    ego = Vehicle(ego_state, VehicleDef(), EGO_ID) 
+    side_slip = 0.
+    ego_state = VehicleState(ego_posF, mdp.env.roadway, ego_vel) # can change the ego state here, but scene only takes in VehicleState
+    ego = Entity(ego_state, VehicleDef(), EGO_ID) 
     push!(mdp.env.scene, ego)
     mdp.env.scene, mdp.env.roadway = create_env(mdp.env)
     mdp.driver_models::Dict{Int, DriverModel} = Dict{Int, DriverModel}(EGO_ID => mdp.model)
@@ -108,22 +122,54 @@ function POMDPs.reward(mdp::laneChangeMDP, s::Scene, a::Int64, sp::Scene)
     # check if we collide BEFORE we check if we're in the goal lane; otherwise, we might crash to get into the goal lane
     # there is a collision_checker(scene, egoid function)
     # first, check if there is a collision
-    mdp.env.collision = collision_checker(sp, EGO_ID)
+    
     # next, get the lane that the ego vehicle is in
-    ego_lane = sp[EGO_ID].state.posF.roadind.tag.lane
+    # ego_lane = sp[EGO_ID].state.posF.roadind.tag.lane
+    ego_veh = get_by_id(s, EGO_ID) #sp[EGO_ID]
+    ego_lane = get_lane(mdp.env.roadway, ego_veh.state).tag.lane
+    mdp.env.collision = collision_checker(sp, EGO_ID)
     r = 0.
     if mdp.env.collision
         mdp.env.terminal_state = true
         r += COLLISION_REWARD
-    elseif ego_lane == mdp.env.desired_lane
+    elseif ego_lane == mdp.env.desired_lane && abs(ego_veh.state.posG.θ) < 0.25 # worked for 0.2
+        # print("made it!")
         mdp.env.terminal_state = true
         r += GOAL_LANE_REWARD
-    elseif mdp.env.num_steps == mdp.env.max_steps # timed out - not sure if this is a good way to do this but let's give it a shot!
+    elseif mdp.env.num_steps >= mdp.env.max_steps # timed out - not sure if this is a good way to do this but let's give it a shot!
         mdp.env.terminal_state = true
         r += TIMEOUT_REWARD
+    elseif ego_veh.state.posG.x >= mdp.env.road_length
+        mdp.env.terminal_state = true
+        r += ROAD_END_REWARD
     else
+        # if ego_lane != mdp.env.desired_lane # make it so it only penalizes for waiting when we're not in the goal lane - trying to get it to straighten out after
+        #     r += WAITING_REWARD
+        # end
         r += WAITING_REWARD
+        r += abs(ego_veh.state.posG.θ) * HEADING_REWARD
     end
+
+    #penalize slowing down too much
+    if ego_veh.state.v < mdp.recommended_speed
+        r += (mdp.recommended_speed - ego_veh.state.v) * TOO_SLOW_REWARD
+    end
+
+    if ego_lane > mdp.env.current_lane
+        r += PROGRESS_REWARD
+        mdp.env.current_lane += 1
+    end
+
+    # penalize facing backwards
+    if ego_veh.state.posG.θ > π/2 || ego_veh.state.posG.θ < -π/2
+        r += BACKWARD_REWARD
+    end
+
+    if is_offroad(ego_veh.state, mdp.env) # offroad 
+        r += get_offroad_distance(ego_veh.state, mdp.env) * OFFROAD_REWARD
+    end
+
+    mdp.env.num_steps += 1
     return r
 end
 
@@ -134,22 +180,22 @@ POMDPs.isterminal(mdp::laneChangeMDP) = mdp.env.terminal_state
 # for now, define the feature vector as the x and y coordinates of each car, along with their velocities
 function POMDPs.convert_s(::Type{V}, s::Scene, mdp::laneChangeMDP) where V<:AbstractArray
     env = mdp.env
-    features = ones(3 + 3 * env.ncars)
-    ego_idx = findfirst(EGO_ID, s)
-    ego_veh = mdp.env.scene[ego_idx]
+    features = ones(mdp.num_features)
+    ego_veh = get_by_id(s, EGO_ID)
     features[1] = ego_veh.state.posG.x
     features[2] = ego_veh.state.posG.y
     features[3] = ego_veh.state.v
-    veh_idx = EGO_ID+1
+    veh_idx = EGO_ID + 1
     feature_idx = 1
     while veh_idx <= env.ncars + 1
-        veh = mdp.env.scene[veh_idx]
+        veh = get_by_id(s, veh_idx)
         features[3+feature_idx:feature_idx+5] = [veh.state.posG.x, veh.state.posG.y, veh.state.v]
         feature_idx += 3
         veh_idx +=1
     end
     features = normalize_features(features)
-    return convert(Array{Float32}, features)
+    # return convert(Array{Float32}, features)
+    return convert(V, features)
 end
 
 # not sure if I need to define the transition function - shouldn't need to since the gen and transition function are redundant
@@ -159,21 +205,21 @@ end
 function action_map(mdp::laneChangeMDP, a::Int64)
     # get safe actions first
     actions = action_space()
-    safe_action_space = get_action_space_dict(actions, mdp.model, mdp.env.scene, mdp.env.roadway, findfirst(EGO_ID, mdp.env.scene))
+    safe_action_space = get_action_space_dict(actions, mdp.model, mdp.env.scene, mdp.env.roadway, EGO_ID)
     # assign 1-3 to left, 4-6 to straight, and 7-9 to right
     action_string = "slow_straight"
     direction = 0
     if a == 1
         action_string = "slow_left"
-        direction = -1
+        direction = 1
         act = actions.slow_left
     elseif a == 2
         action_string = "normal_left"
-        direction = -1
+        direction = 1
         act = actions.normal_left
     elseif a == 3
         action_string = "speed_left"
-        direction = -1
+        direction = 1
         act = actions.speed_left
     elseif a == 4
         action_string = "slow_straight"
@@ -189,15 +235,15 @@ function action_map(mdp::laneChangeMDP, a::Int64)
         act = actions.speed_straight
     elseif a == 7
         action_string = "slow_right"
-        direction = 1
+        direction = -1
         act = actions.slow_right
     elseif a == 8
         action_string = "normal_right"
-        direction = 1
+        direction = -1
         act = actions.normal_right
     elseif a == 9
         action_string = "speed_right"
-        direction = 1
+        direction = -1
         act = actions.speed_right
     end
     # check if the proposed action is contained within the safe action space - if not, just return straight and it should hopefully work
@@ -220,15 +266,56 @@ function normalize_features(features::Array{Float64})
     return features
 end
 
-function simulate(mdp::laneChangeMDP, policy::Policy)
-    mdp.env.scene = initialstate(mdp, rand(Int, 1))
-    scene_vec = [mdp.env.scene]
-    for i = 1:mdp.env.max_steps
-        features = convert_s(mdp.env.scene, mdp)
-        # plug features into policy, get a
-        mdp.env.scene, reward = gen(mdp, mdp.env.scene, a, rand(Int, 1))
-        append!(scene_vec, mdp.env.scene)
-
+function is_offroad(vehicle::VehicleState, env::laneChangeEnvironment)
+    y = vehicle.posG.y
+    nlanes = env.nlanes
+    lane_width = get_lane(env.roadway, vehicle).width
+    if y > (nlanes - 0.5) * lane_width + 1|| y < - 0.5 * lane_width - 1
+        return true
+    else
+        return false
     end
+end
+
+# get the amount that we are offroad so we can scale the penalty accordingly
+function get_offroad_distance(vehicle::VehicleState, env::laneChangeEnvironment)
+    y = vehicle.posG.y
+    nlanes = env.nlanes
+    lane_width = get_lane(env.roadway, vehicle).width
+    # remember that we start in the middle of the bottom lane
+    top_y_bound = (nlanes - 0.5) * lane_width + 1
+    bottom_y_bound = (- 0.5 * lane_width - 1)
+    if y > top_y_bound
+        return y - top_y_bound
+    else
+        return abs(y - bottom_y_bound)
+    end
+end
+
+function simulate(mdp::laneChangeMDP, policy::Policy)
+    mdp.env.scene = initialstate(mdp, MersenneTwister(0))
+    scene_vec = [mdp.env.scene] #Vector{Frame{Entity{VehicleState,VehicleDef,Int64}}}[mdp.env.scene]
+    # @show scene_vec
+    # push!(scene_vec, mdp.env.scene)
+    # @show scene_vec
+    # @show typeof(scene_vec)
+    # @show typeof(mdp.env.scene)
+    # append!(scene_vec, [mdp.env.scene])
+    # scene_vec[1] = mdp.env.scene
+    # @show scene_vec
+    for i = 1:mdp.env.max_steps
+        features = convert_s(Vector{Float32}, mdp.env.scene, mdp)
+        # plug features into policy, get a
+        val = policy.qnetwork(features)
+        a = policy.action_map[argmax(val)]
+        # @show get_by_id(mdp.env.scene, EGO_ID).state.v
+        @show a
+        new_scene, reward = gen(mdp, mdp.env.scene, a, MersenneTwister(0))
+        push!(scene_vec, new_scene)
+        if mdp.env.terminal_state
+            break
+        end
+    end
+    return scene_vec
 end
 
