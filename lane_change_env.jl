@@ -22,7 +22,7 @@ using Parameters
     collision::Bool = false
     terminal_state::Bool = false
     num_steps::Int = 0
-    max_steps::Int = 1000
+    max_steps::Int = 200
 end
 
 # check if the random spot chosen in populate_env is already currently taken; if it is, this will return false. If it is available,

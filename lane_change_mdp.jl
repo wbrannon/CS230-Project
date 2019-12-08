@@ -11,16 +11,22 @@ include("lane_change_env.jl")
 include("lat_lon_driver.jl")
 
 # will probably have to tinker with these
-GOAL_LANE_REWARD = 1. #3. #10000.
-COLLISION_REWARD = -1. #-500.
-WAITING_REWARD = -0.001 #-0.0005 # -1
-TIMEOUT_REWARD = -0.4 #-0.8 #-50.
-BACKWARD_REWARD = -0.8 #-0.4 #-50.
-ROAD_END_REWARD =  -0.4 #-0.8 #-50
-TOO_SLOW_REWARD = -1 #-0.005 #-5.
-OFFROAD_REWARD = -0.4 #-0.01 #-1. # gets scaled by the amount of distance offroad
-HEADING_REWARD = -0.005 #-0.00005 # gets multiplied by heading
-PROGRESS_REWARD = 0.5 #0.7 #500.
+GOAL_LANE_REWARD = 0.1 #3. #10000.
+FINISH_LINE = 1000
+COLLISION_REWARD = -1000. #-500.
+WAITING_REWARD = -0.00001 #-0.0005 # -1
+TIMEOUT_REWARD = -1 #-0.8 #-50.
+BACKWARD_REWARD = -0.0004 #-0.4 #-50.
+ROAD_END_REWARD =  -1 #-0.8 #-50
+TOO_SLOW_REWARD = -0.0002 #-0.005 #-5.
+OFFROAD_REWARD = -0.0005 #-0.01 #-1. # gets scaled by the amount of distance offroad
+HEADING_REWARD = -0.0000001 #-0.00005 # gets multiplied by heading
+HEADING_TOO_HIGH_REWARD = -1.
+NO_PROGRESS_REWARD = -0.0006
+PROGRESS_REWARD = 1 #0.7 #500.
+FINAL_LANE_PROGRESS_REWARD = 1.
+FINAL_LANE_RIGHT_REWARD = 1.
+
 EGO_ID = 1
 
 
@@ -40,17 +46,43 @@ EGO_ID = 1
     recommended_speed::Float64 = 10.
     num_features::Int = (1 + env.ncars) * 3
     side_slip::Float64 = 0.
+    # lane_tracker::LateralDriverModel = ProportionalLaneTracker()
 end
 
 # this needs to return the next state and reward
 function POMDPs.gen(mdp::laneChangeMDP, s::Scene, a::Int64, rng::AbstractRNG)
     scene = deepcopy(s)
     # define action_map function that maps an integer to an action model
-    # vehicle_idx = findfirst(EGO_ID, scene)
-    action, direction = action_map(mdp, a)
     ego_vehicle = get_by_id(s, EGO_ID)
+    # if get_lane(mdp.env.roadway, ego_vehicle.state).tag.lane == 1 && a >= 7 && a <= 9
+    #     a = 5 # take an unsafe right turn and turn it into a continue straight
+    # end
+    action, direction = action_map(mdp, a)
+    # if get_lane(mdp.env.roadway, ego_vehicle.state).tag.lane == mdp.env.desired_lane
+    if direction == 1 # go left
+        if mdp.env.current_lane != mdp.env.desired_lane
+            t = (mdp.env.current_lane + 1 - 0.5) * get_lane(mdp.env.roadway, ego_vehicle.state).width - ego_vehicle.state.posG.y
+        else
+            t = posf(ego_vehicle.state).t
+        end
+    elseif direction == 0
+        t = posf(ego_vehicle.state).t
+    else
+        @assert direction == -1 # go right
+        if mdp.env.current_lane != 1
+            t = (mdp.env.current_lane - 1 - 0.5) * get_lane(mdp.env.roadway, ego_vehicle.state).width - ego_vehicle.state.posG.y
+        else
+            t = posf(ego_vehicle.state).t
+        end
+    end
+    dt = velf(ego_vehicle.state).t
+    action = LatLonAccel(-t * 3.0 - dt * 2.0, action.a_lon) # proportional lane tracker
+
+    # end
+
+    
     # propagate the ego vehicle first, make sure this doesn't cause any issues
-    new_ego_state, mdp.lat_accel, mdp.long_accel, mdp.side_slip = propagate(ego_vehicle, action, EGO_ID, mdp.env.roadway, mdp.timestep, mdp.lat_accel, mdp.long_accel, mdp.side_slip)
+    new_ego_state = propagate(ego_vehicle, action, EGO_ID, mdp.env.roadway, mdp.timestep, mdp.lat_accel, mdp.long_accel, mdp.side_slip)
     # scene[vehicle_idx] = Entity(new_ego_state, scene[EGO_ID].def, scene[vehicle_idx].id)
     # ego_vehicle = get_by_id(scene, EGO_ID)
     scene[EGO_ID] = Entity(new_ego_state, scene[EGO_ID].def, scene[EGO_ID].id)
@@ -124,30 +156,46 @@ function POMDPs.reward(mdp::laneChangeMDP, s::Scene, a::Int64, sp::Scene)
     # first, check if there is a collision
     
     # next, get the lane that the ego vehicle is in
-    # ego_lane = sp[EGO_ID].state.posF.roadind.tag.lane
-    ego_veh = get_by_id(s, EGO_ID) #sp[EGO_ID]
+    ego_veh = get_by_id(sp, EGO_ID) #sp[EGO_ID]
     ego_lane = get_lane(mdp.env.roadway, ego_veh.state).tag.lane
     mdp.env.collision = collision_checker(sp, EGO_ID)
     r = 0.
     if mdp.env.collision
         mdp.env.terminal_state = true
         r += COLLISION_REWARD
-    elseif ego_lane == mdp.env.desired_lane && abs(ego_veh.state.posG.θ) < 0.25 # worked for 0.2
-        # print("made it!")
+    elseif ego_lane == mdp.env.desired_lane && !is_offroad(ego_veh.state, mdp.env) && abs(ego_veh.state.posG.θ) < 0.2 # worked for 0.2
         mdp.env.terminal_state = true
-        r += GOAL_LANE_REWARD
+        r += FINISH_LINE
     elseif mdp.env.num_steps >= mdp.env.max_steps # timed out - not sure if this is a good way to do this but let's give it a shot!
         mdp.env.terminal_state = true
         r += TIMEOUT_REWARD
     elseif ego_veh.state.posG.x >= mdp.env.road_length
         mdp.env.terminal_state = true
         r += ROAD_END_REWARD
+    elseif abs(ego_veh.state.posG.θ) > 1.4
+        mdp.env.terminal_state = true
+        r += HEADING_TOO_HIGH_REWARD
     else
         # if ego_lane != mdp.env.desired_lane # make it so it only penalizes for waiting when we're not in the goal lane - trying to get it to straighten out after
         #     r += WAITING_REWARD
         # end
         r += WAITING_REWARD
         r += abs(ego_veh.state.posG.θ) * HEADING_REWARD
+    end
+
+    if ego_lane == mdp.env.desired_lane
+        old_ego_veh = get_by_id(s, EGO_ID)
+        # do this so it learns to decrease heading in desired lane
+        # further, it penalizes if the heading keeps increasing
+        r += GOAL_LANE_REWARD
+        r += (abs(old_ego_veh.state.posG.θ) - abs(ego_veh.state.posG.θ)) * FINAL_LANE_PROGRESS_REWARD 
+        # try to force to turn right into goal lane
+        # if  a >= 7 && a <= 9 && abs(ego_veh.state.posG.θ) < 2π
+        #     r += FINAL_LANE_RIGHT_REWARD
+        # end
+    else
+        desired_lane_diff = mdp.env.desired_lane - ego_lane
+        r += NO_PROGRESS_REWARD * desired_lane_diff
     end
 
     #penalize slowing down too much
@@ -157,8 +205,9 @@ function POMDPs.reward(mdp::laneChangeMDP, s::Scene, a::Int64, sp::Scene)
 
     if ego_lane > mdp.env.current_lane
         r += PROGRESS_REWARD
-        mdp.env.current_lane += 1
     end
+
+    mdp.env.current_lane = ego_lane # change the assigned lane after the reward is given
 
     # penalize facing backwards
     if ego_veh.state.posG.θ > π/2 || ego_veh.state.posG.θ < -π/2
@@ -166,7 +215,11 @@ function POMDPs.reward(mdp::laneChangeMDP, s::Scene, a::Int64, sp::Scene)
     end
 
     if is_offroad(ego_veh.state, mdp.env) # offroad 
-        r += get_offroad_distance(ego_veh.state, mdp.env) * OFFROAD_REWARD
+        if ego_lane == mdp.env.desired_lane
+            r += OFFROAD_REWARD * get_offroad_distance(ego_veh.state, mdp.env)
+        else
+            r += 10 * OFFROAD_REWARD * get_offroad_distance(ego_veh.state, mdp.env)
+        end
     end
 
     mdp.env.num_steps += 1
@@ -205,7 +258,7 @@ end
 function action_map(mdp::laneChangeMDP, a::Int64)
     # get safe actions first
     actions = action_space()
-    safe_action_space = get_action_space_dict(actions, mdp.model, mdp.env.scene, mdp.env.roadway, EGO_ID)
+    # safe_action_space = get_action_space_dict(actions, mdp.model, mdp.env.scene, mdp.env.roadway, EGO_ID)
     # assign 1-3 to left, 4-6 to straight, and 7-9 to right
     action_string = "slow_straight"
     direction = 0
@@ -247,10 +300,10 @@ function action_map(mdp::laneChangeMDP, a::Int64)
         act = actions.speed_right
     end
     # check if the proposed action is contained within the safe action space - if not, just return straight and it should hopefully work
-    if !safe_action_space[action_string]
-        direction = 0
-        act = actions.slow_straight
-    end
+    # if !safe_action_space[action_string]
+    #     direction = 0
+    #     act = actions.slow_straight
+    # end
 
     return act, direction
 end
@@ -270,7 +323,7 @@ function is_offroad(vehicle::VehicleState, env::laneChangeEnvironment)
     y = vehicle.posG.y
     nlanes = env.nlanes
     lane_width = get_lane(env.roadway, vehicle).width
-    if y > (nlanes - 0.5) * lane_width + 1|| y < - 0.5 * lane_width - 1
+    if y > (nlanes - 0.5) * lane_width || y < - 0.5 * lane_width
         return true
     else
         return false
@@ -283,8 +336,8 @@ function get_offroad_distance(vehicle::VehicleState, env::laneChangeEnvironment)
     nlanes = env.nlanes
     lane_width = get_lane(env.roadway, vehicle).width
     # remember that we start in the middle of the bottom lane
-    top_y_bound = (nlanes - 0.5) * lane_width + 1
-    bottom_y_bound = (- 0.5 * lane_width - 1)
+    top_y_bound = (nlanes - 0.5) * lane_width
+    bottom_y_bound = (- 0.5 * lane_width)
     if y > top_y_bound
         return y - top_y_bound
     else
@@ -295,6 +348,7 @@ end
 function simulate(mdp::laneChangeMDP, policy::Policy)
     mdp.env.scene = initialstate(mdp, MersenneTwister(0))
     scene_vec = [mdp.env.scene] #Vector{Frame{Entity{VehicleState,VehicleDef,Int64}}}[mdp.env.scene]
+    total_reward = 0.
     # @show scene_vec
     # push!(scene_vec, mdp.env.scene)
     # @show scene_vec
@@ -309,8 +363,11 @@ function simulate(mdp::laneChangeMDP, policy::Policy)
         val = policy.qnetwork(features)
         a = policy.action_map[argmax(val)]
         # @show get_by_id(mdp.env.scene, EGO_ID).state.v
-        @show a
         new_scene, reward = gen(mdp, mdp.env.scene, a, MersenneTwister(0))
+        total_reward += reward
+        @show a
+        @show total_reward
+        @show(get_lane(mdp.env.roadway, new_scene[EGO_ID].state).tag.lane)
         push!(scene_vec, new_scene)
         if mdp.env.terminal_state
             break

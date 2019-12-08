@@ -14,8 +14,8 @@ DIR_LEFT =  1
 MIN_LANE_CHANGE_HEADWAY = 10. # m
 NUM_DIRECTIONS = 3
 TIMESTEP = 0.1
-LONG_ACCEL = 3 * TIMESTEP # m/s^2
-LAT_ACCEL = 0.5 * TIMESTEP # m/s^2
+LONG_ACCEL = 3 #* TIMESTEP # m/s^2
+LAT_ACCEL = 0.5 #* TIMESTEP # m/s^2
 RIGHT_LANE_IDX = 1 # change this if the orientation changes for some reason
 
 mutable struct action_space
@@ -39,7 +39,7 @@ function action_space()
 
     slow_straight = LatLonAccel(0., -LONG_ACCEL) 
     straight = LatLonAccel(0., 0.)
-    speed_straight = speed_straight::LatLonAccel=LatLonAccel(0., LONG_ACCEL)
+    speed_straight = LatLonAccel(0., LONG_ACCEL)
 
     slow_right = LatLonAccel(-LAT_ACCEL, -LONG_ACCEL)
     normal_right = LatLonAccel(-LAT_ACCEL, 0.)
@@ -58,7 +58,7 @@ function get_action_space_dict(actions::action_space, model::lat_lon_driver, sce
     trial_string = "left"
     direction = 1 # corresponds to left turn 
     # action = actions.slow_turn
-    for i in 1:NUMBER_DISCRETE_ACTIONS+1
+    for i = 1:NUMBER_DISCRETE_ACTIONS
         # check if potential action is safe
         if is_safe(model, actions, prev_string * trial_string, scene, roadway, vehicle_idx, direction)
             action_dict[prev_string * trial_string] = true

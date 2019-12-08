@@ -8,8 +8,8 @@ using BSON: @load, @save
 include("lane_change_mdp.jl")
 
 mdp = laneChangeMDP()
-model = Chain(Dense(mdp.num_features, 32, relu), Dense(32,32, relu), Dense(32,32, relu), Dense(32,32, relu), Dense(32, 32, relu), Dense(32, 32, relu), Dense(32, 32, relu), Dense(32, n_actions(mdp), sigmoid))
-solver = DeepQLearningSolver(qnetwork=model, max_steps=100000, eval_freq = 10000, max_episode_length=1000, learning_rate=0.0001, log_freq=1000, target_update_freq = 5000, recurrence=false, double_q=false, dueling=true, prioritized_replay=true)
+model = Chain(Dense(mdp.num_features, 32, relu), Dense(32,32, relu), Dense(32,32, relu), Dense(32,32, relu), Dense(32, 32, relu), Dense(32, 32, relu), Dense(32, 32, relu), Dense(32,32, relu), Dense(32,32, relu), Dense(32, n_actions(mdp)))
+solver = DeepQLearningSolver(qnetwork=model, max_steps=200000, eval_freq = 10000, max_episode_length=200, learning_rate=0.0005, log_freq=1000, target_update_freq = 10000, recurrence=false, double_q=false, dueling=true, prioritized_replay=true)
 policy = solve(solver, mdp)
 
 @save "policy1.bson" policy
