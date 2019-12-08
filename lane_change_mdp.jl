@@ -18,7 +18,7 @@ WAITING_REWARD = -0.00001 #-0.0005 # -1
 TIMEOUT_REWARD = -1 #-0.8 #-50.
 BACKWARD_REWARD = -0.0004 #-0.4 #-50.
 ROAD_END_REWARD =  -1 #-0.8 #-50
-TOO_SLOW_REWARD = -0.0002 #-0.005 #-5.
+TOO_SLOW_REWARD = -0.002 #-0.005 #-5.
 OFFROAD_REWARD = -0.0005 #-0.01 #-1. # gets scaled by the amount of distance offroad
 HEADING_REWARD = -0.0000001 #-0.00005 # gets multiplied by heading
 HEADING_TOO_HIGH_REWARD = -1.
@@ -60,19 +60,21 @@ function POMDPs.gen(mdp::laneChangeMDP, s::Scene, a::Int64, rng::AbstractRNG)
     action, direction = action_map(mdp, a)
     # if get_lane(mdp.env.roadway, ego_vehicle.state).tag.lane == mdp.env.desired_lane
     if direction == 1 # go left
-        if mdp.env.current_lane != mdp.env.desired_lane
+        if mdp.env.current_lane != mdp.env.desired_lane && abs(ego_vehicle.state.posG.θ) <= pi/3
             t = (mdp.env.current_lane + 1 - 0.5) * get_lane(mdp.env.roadway, ego_vehicle.state).width - ego_vehicle.state.posG.y
         else
+            a = 5
             t = posf(ego_vehicle.state).t
         end
     elseif direction == 0
         t = posf(ego_vehicle.state).t
     else
         @assert direction == -1 # go right
-        if mdp.env.current_lane != 1
+        if mdp.env.current_lane != 1 && abs(ego_vehicle.state.posG.θ) <= pi/3
             t = (mdp.env.current_lane - 1 - 0.5) * get_lane(mdp.env.roadway, ego_vehicle.state).width - ego_vehicle.state.posG.y
         else
             t = posf(ego_vehicle.state).t
+            a = 5
         end
     end
     dt = velf(ego_vehicle.state).t
@@ -172,9 +174,9 @@ function POMDPs.reward(mdp::laneChangeMDP, s::Scene, a::Int64, sp::Scene)
     elseif ego_veh.state.posG.x >= mdp.env.road_length
         mdp.env.terminal_state = true
         r += ROAD_END_REWARD
-    elseif abs(ego_veh.state.posG.θ) > 1.4
-        mdp.env.terminal_state = true
-        r += HEADING_TOO_HIGH_REWARD
+    # elseif abs(ego_veh.state.posG.θ) > 3.14
+    #     mdp.env.terminal_state = true
+    #     r += HEADING_TOO_HIGH_REWARD
     else
         # if ego_lane != mdp.env.desired_lane # make it so it only penalizes for waiting when we're not in the goal lane - trying to get it to straighten out after
         #     r += WAITING_REWARD
