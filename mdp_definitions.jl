@@ -43,21 +43,33 @@ function AutomotiveDrivingModels.propagate(vehicle::Entity{VehicleState, Vehicle
 
     ds₂ = ds + action.a_lon*timestep
     dt₂ = dt + action.a_lat*timestep
+
+    if dt₂ > 5.
+        dt₂ = 5.
+    elseif dt₂ < -5.
+        dt₂ = -5.
+    end
+
     speed₂ = sqrt(dt₂*dt₂ + ds₂*ds₂)
     v₂ = sqrt(dt₂*dt₂ + ds₂*ds₂) # v is the magnitude of the velocity vector
     ϕ₂ = atan(dt₂, ds₂)
 
-    roadind = move_along(posf(agent).roadind, roadway, Δs)
-    footpoint = roadway[roadind]
+    # roadind = move_along(posf(agent).roadind, roadway, Δs)
+    # footpoint = roadway[roadind]
     new_x = x + ds * timestep
     new_y = y + dt * timestep
-    new_θ = θ + atan(dt, ds) * timestep
+    # new_θ = θ + atan(dt, ds) * timestep
+    # @show new_θ
+    # @show ϕ₂
+    # @show dt
+    # @show ds
 
-    posG = VecSE2{Float64}(new_x, new_y, new_θ)
+    posG = VecSE2{Float64}(new_x, new_y, ϕ₂)
 
     # posG = VecE2{Float64}(footpoint.pos.x,footpoint.pos.y) + polar(t + timestep, footpoint.pos.θ + π/2)
 
     # posG = VecSE2{Float64}(posG.x, posG.y, footpoint.pos.θ + ϕ₂)
+    # @show posG.y
 
     new_vehicle_state = VehicleState(posG, roadway, v₂)
 
